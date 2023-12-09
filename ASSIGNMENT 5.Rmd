@@ -1,0 +1,201 @@
+# Assignemnt 5 - Software Tools
+# By Veedhi Solanki, last updated on December 6, 2023
+# Proteomics: I explored the R for Proteomics vignette fully and here the goal of the project focuses on analytical methodology. Choosing 1-2 key analytical decisions from the vignette to vary, which could include a methods choice or a specific parameter setting. Iterate over multiple choices and explore the impact of key analytical choices upon the results. I will be using the raw data(xzml) format and mztab formats from the PRIDE database with ID PXD000001.The dataset (PXD0000016 from ProteomeXchange) is a TMT 6-plex proteomics experiment involving the addition of four exogenous proteins (ENO, BSA, PHO, CYT) at known concentrations to an Erwinia carotovora lysate. The experiment includes differential labeling with TMT reagents, fractionation by reverse phase nanoflow UPLC, and analysis on an LTQ Orbitrap Velos mass spectrometer. The dataset is designed for illustrating proteomic analysis pipelines and provides a larger, publicly available dataset for researchers.I will be exploring different parameters and methods. As well as I will be looking at annotations for proteomics data in the end using the gene of interest.
+
+```{r echo=TRUE}
+
+# Installing and loading packages
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+library("BiocManager")
+BiocManager::install("RforProteomics")
+library("RforProteomics")
+library("rpx")
+
+# Setting up the working environment by preloading color, shape, and plotting packages
+library("RColorBrewer") 
+library("ggplot2")  
+library("reshape2") 
+
+# Getting the raw file dataset from the PRIDE.
+# After reviewing the entire vignette, I am interested in exploring Quantitative proteomics and relative aspects more. Using the TMT 6-plex dataset PXD000001 for analysis.
+# rpx package is used to get data directly from pride.
+px1 <- PXDataset("PXD000001")
+px1 # 11 files in total
+mzxml <- pxget(px1, "TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01.mzXML")
+pxfiles(px1) # lists all the files
+
+# There are 11 files in total; first, let's explore mztab file which is a structured and standardized format for reporting and exchanging data related to mass spectrometry-based experiments.
+# It contains information about identified proteins, peptides, and their respective spectral matches.
+### Getting mztab data from px1.
+mztab <- pxget(px1, "F063721.dat-mztab.txt")
+mztab
+# loading mztab peptide data
+qnt <- readMzTabData(mztab, what = "PEP", version = "0.9")
+sampleNames(qnt) <- reporterNames(TMT6)
+head(exprs(qnt))
+# removing missing values - Quality control
+qnt <- filterNA(qnt)
+processingData(qnt)
+#Now I am here adding a bar plot to visualize if there were any missing values present before and after filtering. 
+# Count missing values before removal
+missing_before <- colSums(is.na(qnt))
+# Bar plot for missing values before removal
+barplot(missing_before, col = "red", main = "Missing Values Before Removal",
+        xlab = "Variables", ylab = "Count")
+# Count missing values after removal
+qnt_no_missing <- filterNA(qnt)
+missing_after <- colSums(is.na(qnt_no_missing))
+# Bar plot for missing values after removal
+barplot(missing_after, col = "green", main = "Missing Values After Removal",
+        xlab = "Variables", ylab = "Count")
+
+# Combining the peptides into proteins by grouping through the accession number in the metadata.
+# This also calculates protein intensities by summing the peptide intensity data.
+protqnt <- combineFeatures(qnt,
+                           groupBy = fData(qnt)$accession,
+                           method = sum)
+#I am going to chnage the method from sum to mean and explore any differences. This is exploring analytical method 1.
+protqnt_m <- combineFeatures(qnt,
+                           groupBy = fData(qnt)$accession,
+                           method = mean)
+
+# Visualizing the intensities of 5 proteins. This will produce a plot on the protein quantitation data.
+#protqnt_SUM
+cls <- brewer.pal(5, "Set1")
+matplot(t(tail(exprs(protqnt), n = 5)), type = "b",
+        lty = 1, col = cls,
+        ylab = "Protein intensity (summed peptides)",
+        xlab = "TMT reporters")
+legend("topright", tail(featureNames(protqnt), n=5),
+       lty = 1, bty = "n", cex = .8, col = cls)
+#protqnt_MEAN
+cls <- brewer.pal(5, "Set1")
+matplot(t(tail(exprs(protqnt_m), n = 5)), type = "b",
+        lty = 1, col = cls,
+        ylab = "Protein intensity (summed peptides)",
+        xlab = "TMT reporters")
+legend("topright", tail(featureNames(protqnt_m), n=5),
+       lty = 1, bty = "n", cex = .8, col = cls)
+
+# Now let's analyze the data through a heatmap because it's essential to analyze and visualize it in different ways.
+# Heatmap of mztab data:
+# Normalize the quantitation data by sum
+qntS <- normalise(qnt, "sum")
+# Further normalize the data using vsn (variance stabilizing normalization)
+qntV <- normalise(qntS, "vsn")
+qntV2 <- normalise(qnt, "vsn")
+# Define a list of protein accessions
+acc <- c("P00489", "P00924",
+         "P02769", "P62894",
+         "ECA")
+# Find indices of proteins in the dataset based on the accessions
+idx <- sapply(acc, grep, fData(qnt)$accession)
+idx2 <- sapply(idx, head, 3)
+# Extract a subset of data (small) containing the first 3 peptides of each protein
+small <- qntS[unlist(idx2), ]
+# Further subset the data (medium) by taking the first 10 peptides of each protein
+idx3 <- sapply(idx, head, 10)
+medium <- qntV[unlist(idx3), ]
+# Extract expression values from the medium dataset
+m <- exprs(medium)
+# Define column and row names
+colnames(m) <- c("126", "127", "128",
+                 "129", "130", "131")
+rownames(m) <- fData(medium)$accession
+rownames(m)[grep("CYC", rownames(m))] <- "CYT"
+rownames(m)[grep("ENO", rownames(m))] <- "ENO"
+rownames(m)[grep("ALB", rownames(m))] <- "BSA"
+rownames(m)[grep("PYGM", rownames(m))] <- "PHO"
+rownames(m)[grep("ECA", rownames(m))] <- "Background"
+# Define colors for the heatmap
+cls <- c(brewer.pal(length(unique(rownames(m)))-1, "Set1"),
+         "grey")
+names(cls) <- unique(rownames(m))
+# Define a color ramp for the heatmap
+wbcol <- colorRampPalette(c("white", "darkblue"))(256)
+# Create a heatmap with specified colors and row side colors
+heatmap(m, col = wbcol, RowSideColors=cls[rownames(m)])
+## Modification in method here for the healt map:
+# Normalize the quantitation data by quantile
+qntQ <- normalise(qnt, "quantiles")
+# Normalize the quantitation data using median (replacing "sum" with "median") This is exploring analytical method 2.
+qntM <- normalise(qntQ, "center.median")
+qntM2 <- normalise(qnt, "center.median")  
+small_ <- qntM[unlist(idx2), ]  
+medium_ <- qntQ[unlist(idx3), ]  
+m_ <- exprs(medium_)
+colnames(m_) <- c("126", "127", "128",
+                  "129", "130", "131")
+rownames(m_) <- fData(medium_)$accession
+rownames(m_)[grep("CYC", rownames(m_))] <- "CYT"
+rownames(m_)[grep("ENO", rownames(m_))] <- "ENO"
+rownames(m_)[grep("ALB", rownames(m_))] <- "BSA"
+rownames(m_)[grep("PYGM", rownames(m_))] <- "PHO"
+rownames(m_)[grep("ECA", rownames(m_))] <- "Background"
+cls_ <- c(brewer.pal(length(unique(rownames(m_)))-1, "Set1"),
+          "grey")
+names(cls_) <- unique(rownames(m_))
+wbcol_ <- colorRampPalette(c("white", "darkblue"))(256)
+heatmap(m_, col = wbcol_, RowSideColors=cls_[rownames(m_)])
+
+# Now let's create a normalized intensity spike plot using the CRAN package ggplot2. Here two plots will be created the second one is where the quntile normalization is explored.
+dfr <- data.frame(exprs(small),
+                  Protein = as.character(fData(small)$accession),
+                  Feature = featureNames(small),
+                  stringsAsFactors = FALSE)
+colnames(dfr) <- c("126", "127", "128", "129", "130", "131",
+                   "Protein", "Feature")
+#Replace the protein names in the data frame with more readable names (e.g., ENO, CYT, BSA, PHO) for better visualization
+dfr$Protein[dfr$Protein == "sp|P00924|ENO1_YEAST"] <- "ENO"
+dfr$Protein[dfr$Protein == "sp|P62894|CYC_BOVIN"]  <- "CYT"
+dfr$Protein[dfr$Protein == "sp|P02769|ALBU_BOVIN"] <- "BSA"
+dfr$Protein[dfr$Protein == "sp|P00489|PYGM_RABIT"] <- "PHO"
+dfr$Protein[grep("ECA", dfr$Protein)] <- "Background"
+dfr2 <- melt(dfr)
+# Using Protein, Feature as id variables
+ggplot(aes(x = variable, y = value, colour = Protein),
+       data = dfr2) +
+  geom_point() +
+  geom_line(aes(group=as.factor(Feature)), alpha = 0.5) +
+  facet_grid(. ~ Protein) + theme(legend.position="none") +
+  labs(x = "Reporters", y = "Normalized intensity")
+
+#Change normalization method (Sum(small dataset used) to qunatile(snmall_ dataset used))
+dfr_ <- data.frame(exprs(small_),
+                  Protein = as.character(fData(small_)$accession),
+                  Feature = featureNames(small_),
+                  stringsAsFactors = FALSE)
+colnames(dfr_) <- c("126", "127", "128", "129", "130", "131",
+                   "Protein", "Feature")
+dfr_$Protein[dfr_$Protein == "sp|P00924|ENO1_YEAST"] <- "ENO"
+dfr_$Protein[dfr_$Protein == "sp|P62894|CYC_BOVIN"]  <- "CYT"
+dfr_$Protein[dfr_$Protein == "sp|P02769|ALBU_BOVIN"] <- "BSA"
+dfr_$Protein[dfr_$Protein == "sp|P00489|PYGM_RABIT"] <- "PHO"
+dfr_$Protein[grep("ECA", dfr$Protein)] <- "Background"
+dfr2_ <- melt(dfr_)
+ggplot(aes(x = variable, y = value, colour = Protein),
+       data = dfr2_) +
+  geom_point() +
+  geom_line(aes(group=as.factor(Feature)), alpha = 0.5) +
+  facet_grid(. ~ Protein) + theme(legend.position="none") +
+  labs(x = "Reporters", y = "Normalized intensity")
+
+# Now since we had 11 files, we explored mztab file and got interesting analysis. Let's explore mzXML files. mzXML files store raw mass spectrometry data, including ion m/z values, intensity information, and scan details.
+mzxml <- pxget(px1, "TMT_Erwinia_1uLSike_Top10HCD_isol2_45stepped_60min_01.mzXML")
+rawms <- readMSData(mzxml, centroided = TRUE, verbose = FALSE)
+# The raw data are quantified using the quantify method specifying the TMT 6-plex isobaric tags and a 7th peak of interest corresponding to the un-dissociated reporter tag peaks.
+#This is to create MAPlot
+pch <- rep(1, nrow(qnt))
+cls <- rep("#00000050", nrow(qnt))
+cls[grep("P02769", fData(qnt)$accession)] <- "gold4" # BSA
+cls[grep("P00924", fData(qnt)$accession)] <- "dodgerblue" # ENO
+cls[grep("P62894", fData(qnt)$accession)] <- "springgreen4" # CYT
+cls[grep("P00489", fData(qnt)$accession)] <- "darkorchid2" # PHO
+pch[grep("P02769", fData(qnt)$accession)] <- 19
+pch[grep("P00924", fData(qnt)$accession)] <- 19
+pch[grep("P62894", fData(qnt)$accession)] <- 19
+pch[grep("P00489", fData(qnt)$accession)] <- 19
+
+# 3. Figure 7: MAplot on an MSnSet instance
+MAplot(qnt[, c(4, 2)], cex = .9, col = cls, pch = pch, show.statistics = FALSE)
